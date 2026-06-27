@@ -14,7 +14,7 @@ import aiohttp
 import redis.asyncio as aioredis
 from bs4 import BeautifulSoup
 from lightrag import LightRAG
-from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
+from lightrag.llm.openai import openai_complete_if_cache, openai_embed
 from lightrag.utils import EmbeddingFunc
 from pypdf import PdfReader
 
@@ -22,7 +22,8 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-# Maximum document text size (in characters) passed to LightRAG at once
+# Maximum document text size (in characters) passed to LightRAG at once.
+# Documents longer than this will be truncated; a warning is emitted.
 _MAX_CHUNK_CHARS = 200_000
 
 
@@ -42,7 +43,7 @@ def _build_rag(config: Config) -> LightRAG:
     embedding_model = config.embedding_model
 
     async def llm_func(prompt: str, **kwargs: Any) -> str:
-        return await gpt_4o_mini_complete(prompt, model=llm_model, **kwargs)
+        return await openai_complete_if_cache(llm_model, prompt, **kwargs)
 
     async def embed_func(texts: list[str]) -> list[list[float]]:
         return await openai_embed(texts, model=embedding_model)
@@ -123,36 +124,64 @@ class RAGWorker:
         return self._rag
 
     async def embed_document(self, url: str, metadata: dict[str, Any] | None = None) -> None:
-        """Download *url*, extract text and insert it into the RAG store."""
-        logger.info("Embedding document: %s", url)
-        try:
-            async with aiohttp.ClientSession() as session:
-                content, content_type = await _fetch_bytes(session, url)
+        """Download *url*, extract text and insert it into the RAG store.
 
-            text = _extract_text(content, content_type, url)
-            if not text.strip():
-                logger.warning("No text extracted from %s – skipping", url)
-                return
+        *metadata* is an optional dict of extra fields (e.g. ``title``,
+        ``source``, ``author``) received alongside the URL.  Non-empty
+        metadata fields are prepended to the document text so they are
+        indexed as part of the content.
 
-            rag = await self._get_rag()
-            # LightRAG's insert is synchronous; run it in a thread to avoid
-            # blocking the event loop.
-            await asyncio.get_event_loop().run_in_executor(
-                None, rag.insert, text[:_MAX_CHUNK_CHARS]
+        Raises ``aiohttp.ClientError`` for HTTP-level failures and
+        ``ValueError`` / ``UnicodeDecodeError`` for document-level parse
+        failures.  All other exceptions propagate to the caller.
+        """
+        meta = metadata or {}
+        logger.info("Embedding document: %s  metadata=%s", url, meta)
+
+        async with aiohttp.ClientSession() as session:
+            content, content_type = await _fetch_bytes(session, url)
+
+        text = _extract_text(content, content_type, url)
+        if not text.strip():
+            logger.warning("No text extracted from %s – skipping", url)
+            return
+
+        # Prepend metadata fields so they are searchable inside the RAG
+        # knowledge graph.  Only non-empty scalar values are included.
+        meta_header = "\n".join(
+            f"{key}: {value}"
+            for key, value in meta.items()
+            if isinstance(value, (str, int, float)) and str(value).strip()
+        )
+        if meta_header:
+            text = f"{meta_header}\n\n{text}"
+
+        if len(text) > _MAX_CHUNK_CHARS:
+            logger.warning(
+                "Document %s exceeds %d chars (%d); truncating",
+                url,
+                _MAX_CHUNK_CHARS,
+                len(text),
             )
-            logger.info("Successfully embedded document: %s", url)
+            text = text[:_MAX_CHUNK_CHARS]
 
-        except aiohttp.ClientError as exc:
-            logger.error("HTTP error while fetching %s: %s", url, exc)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Unexpected error while embedding %s: %s", url, exc)
+        rag = await self._get_rag()
+        # LightRAG's insert is synchronous; run it in a thread to avoid
+        # blocking the event loop.
+        await asyncio.get_event_loop().run_in_executor(None, rag.insert, text)
+        logger.info("Successfully embedded document: %s", url)
 
     async def _process_message(self, data: bytes | str) -> None:
         url, metadata = _parse_message(data)
         if not url:
             logger.warning("Received empty or invalid message; skipping")
             return
-        await self.embed_document(url, metadata)
+        try:
+            await self.embed_document(url, metadata)
+        except aiohttp.ClientError as exc:
+            logger.error("HTTP error while fetching %s: %s", url, exc)
+        except (ValueError, UnicodeDecodeError, OSError) as exc:
+            logger.error("Document parse error for %s: %s", url, exc)
 
     async def run(self) -> None:
         """Connect to Redis, subscribe to the configured channel and process messages."""
@@ -180,3 +209,4 @@ class RAGWorker:
     async def close(self) -> None:
         if self._redis:
             await self._redis.aclose()
+

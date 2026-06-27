@@ -174,7 +174,44 @@ class TestRAGWorkerEmbedDocument:
         assert "Test content" in inserted_text
 
     @pytest.mark.asyncio
+    async def test_metadata_prepended_to_text(self):
+        worker = RAGWorker(Config())
+
+        mock_rag = MagicMock()
+        mock_rag.initialize_storages = AsyncMock()
+        mock_rag.insert = MagicMock()
+        worker._rag = mock_rag
+
+        html_content = b"<html><body><p>Body text</p></body></html>"
+
+        with patch("worker.aiohttp.ClientSession") as mock_session_cls:
+            mock_response = AsyncMock()
+            mock_response.headers = {"Content-Type": "text/html"}
+            mock_response.read = AsyncMock(return_value=html_content)
+            mock_response.raise_for_status = MagicMock()
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=False)
+
+            mock_session = AsyncMock()
+            mock_session.get = MagicMock(return_value=mock_response)
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=False)
+            mock_session_cls.return_value = mock_session
+
+            await worker.embed_document(
+                "https://example.com/page.html",
+                metadata={"title": "My Doc", "author": "Alice"},
+            )
+
+        mock_rag.insert.assert_called_once()
+        inserted_text = mock_rag.insert.call_args[0][0]
+        assert "title: My Doc" in inserted_text
+        assert "author: Alice" in inserted_text
+        assert "Body text" in inserted_text
+
+    @pytest.mark.asyncio
     async def test_http_error_is_handled_gracefully(self):
+        """_process_message must swallow HTTP errors without crashing the worker."""
         import aiohttp
 
         worker = RAGWorker(Config())
@@ -188,8 +225,8 @@ class TestRAGWorkerEmbedDocument:
             mock_session.__aexit__ = AsyncMock(return_value=False)
             mock_session_cls.return_value = mock_session
 
-            # Should not raise
-            await worker.embed_document("https://example.com/missing.pdf")
+            # _process_message catches ClientError – should not raise
+            await worker._process_message(b"https://example.com/missing.pdf")
 
     @pytest.mark.asyncio
     async def test_empty_text_skips_insert(self):
