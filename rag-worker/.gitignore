@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment files (contain secrets)
+.env
+
+# LightRAG runtime storage
+rag_storage/
+
+# pytest cache
+.pytest_cache/
