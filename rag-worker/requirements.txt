@@ -1,0 +1,27 @@
+# Core RAG library
+lightrag-hku>=1.3.0
+
+# PostgreSQL async driver (used by LightRAG PostgreSQL storage)
+asyncpg>=0.29.0
+
+# Redis async client
+redis[hiredis]>=5.0.0
+
+# Async HTTP client for downloading documents
+aiohttp>=3.9.0
+
+# Environment variable loading
+python-dotenv>=1.0.0
+
+# OpenAI client (LLM + embeddings)
+openai>=1.30.0
+tiktoken>=0.7.0
+
+# HTML parsing for web document extraction
+beautifulsoup4>=4.12.0
+
+# PDF text extraction
+pypdf>=4.0.0
+
+# Numerical operations (required by LightRAG)
+numpy>=1.26.0
