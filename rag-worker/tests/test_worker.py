@@ -216,7 +216,8 @@ class TestRAGWorkerEmbedDocument:
 
         worker = RAGWorker(Config())
 
-        with patch("worker.aiohttp.ClientSession") as mock_session_cls:
+        with patch("worker.aiohttp.ClientSession") as mock_session_cls, \
+             patch("worker.logger") as mock_logger:
             mock_session = AsyncMock()
             mock_session.get = MagicMock(
                 side_effect=aiohttp.ClientConnectionError("connection refused")
@@ -227,6 +228,10 @@ class TestRAGWorkerEmbedDocument:
 
             # _process_message catches ClientError – should not raise
             await worker._process_message(b"https://example.com/missing.pdf")
+
+        mock_logger.error.assert_called_once()
+        error_msg = mock_logger.error.call_args[0]
+        assert "https://example.com/missing.pdf" in error_msg[1]
 
     @pytest.mark.asyncio
     async def test_empty_text_skips_insert(self):

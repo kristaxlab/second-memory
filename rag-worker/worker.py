@@ -131,9 +131,10 @@ class RAGWorker:
         metadata fields are prepended to the document text so they are
         indexed as part of the content.
 
-        Raises ``aiohttp.ClientError`` for HTTP-level failures and
+        Raises ``aiohttp.ClientError`` for HTTP-level failures,
         ``ValueError`` / ``UnicodeDecodeError`` for document-level parse
-        failures.  All other exceptions propagate to the caller.
+        failures, and ``OSError`` for I/O errors.  All other exceptions
+        propagate to the caller.
         """
         meta = metadata or {}
         logger.info("Embedding document: %s  metadata=%s", url, meta)
